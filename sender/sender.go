@@ -26,10 +26,21 @@ func JustSend(options libs.Options, req libs.Request) (res libs.Response, err er
 	url := req.URL
 	body := req.Body
 	headers := GetHeaders(req)
+	proxy := options.Proxy
+
+	// override proxy
+	if req.Proxy != "" && req.Proxy != "blank" {
+		proxy = req.Proxy
+	}
 
 	timeout := options.Timeout
 	if req.Timeout > 0 {
 		timeout = req.Timeout
+	}
+
+	disableCompress := false
+	if len(headers) > 0 && strings.Contains(headers["Accept-Encoding"], "gzip") {
+		disableCompress = true
 	}
 
 	// update it again
@@ -49,6 +60,26 @@ func JustSend(options libs.Options, req libs.Request) (res libs.Response, err er
 
 	client := resty.New()
 	client.SetLogger(logger)
+	tlsCfg := &tls.Config{
+		Renegotiation:            tls.RenegotiateOnceAsClient,
+		PreferServerCipherSuites: true,
+		InsecureSkipVerify:       true,
+	}
+
+	if proxy != "" {
+		// some times burp reject default cipher
+		tlsCfg = &tls.Config{
+			CipherSuites: []uint16{
+				tls.TLS_RSA_WITH_RC4_128_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+			},
+			Renegotiation:            tls.RenegotiateOnceAsClient,
+			PreferServerCipherSuites: true,
+			InsecureSkipVerify:       true,
+		}
+	}
+
 	client.SetTransport(&http.Transport{
 		MaxIdleConns:          100,
 		MaxConnsPerHost:       1000,
@@ -56,19 +87,17 @@ func JustSend(options libs.Options, req libs.Request) (res libs.Response, err er
 		ExpectContinueTimeout: time.Duration(timeout) * time.Second,
 		ResponseHeaderTimeout: time.Duration(timeout) * time.Second,
 		TLSHandshakeTimeout:   time.Duration(timeout) * time.Second,
-		DisableCompression:    true,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		DisableCompression:    disableCompress,
+		DisableKeepAlives:     true,
+		TLSClientConfig:       tlsCfg,
 	})
 
+	if proxy != "" {
+		client.SetProxy(proxy)
+	}
 	client.SetHeaders(headers)
 	client.SetCloseConnection(true)
-	if options.Proxy != "" {
-		client.SetProxy(options.Proxy)
-	}
-	// override proxy
-	if req.Proxy != "" && req.Proxy != "blank" {
-		client.SetProxy(req.Proxy)
-	}
+
 	if options.Retry > 0 {
 		client.SetRetryCount(options.Retry)
 	}
@@ -143,7 +172,7 @@ func JustSend(options libs.Options, req libs.Request) (res libs.Response, err er
 			Get(url)
 		break
 	case "post":
-		resp, err = client.R().
+		resp, err = client.R().EnableTrace().
 			SetBody([]byte(body)).
 			Post(url)
 		break
@@ -179,8 +208,11 @@ func JustSend(options libs.Options, req libs.Request) (res libs.Response, err er
 		return res, nil
 	}
 
-	if err != nil || resp == nil {
+	if err != nil {
 		utils.ErrorF("%v %v", url, err)
+		if strings.Contains(err.Error(), "EOF") && resp.StatusCode() != 0 {
+			return ParseResponse(*resp), nil
+		}
 		return libs.Response{}, err
 	}
 

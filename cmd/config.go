@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/fatih/color"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,32 +27,31 @@ func init() {
 	configCmd.Flags().Bool("clean", false, "Clean old record")
 	configCmd.Flags().StringP("action", "a", "", "Action")
 	// used for cred action
-	configCmd.Flags().String("user", "", "Username")
-	configCmd.Flags().String("pass", "", "Password")
-	configCmd.Flags().Bool("hh", false, "More helper")
-	configCmd.Flags().Bool("mics", true, "Skip import mics signatures")
 	configCmd.Flags().Bool("poll", false, "Polling all record in OOB config")
-	// used for update action
 	configCmd.Flags().String("secret", "", "Secret of Burp Collab")
 	configCmd.Flags().String("collab", "", "List of Burp Collab File")
-	configCmd.Flags().String("repo", "", "Signature Repo")
-	configCmd.Flags().StringVarP(&options.Server.Key, "key", "K", "", "Private Key to pull repo")
+	// used for update action
+	configCmd.Flags().BoolVar(&options.Config.SkipMics, "mics", true, "Skip import mics signatures")
+	configCmd.Flags().BoolVarP(&options.Config.Forced, "yes", "y", false, "Forced to delete old folder")
+	configCmd.Flags().StringVar(&options.Config.Username, "user", "", "Username")
+	configCmd.Flags().StringVar(&options.Config.Password, "pass", "", "Password")
+	configCmd.Flags().StringVar(&options.Config.Repo, "repo", "", "Signature Repo")
+	configCmd.Flags().StringVarP(&options.Config.PrivateKey, "key", "K", "", "Private Key to pull repo")
 	configCmd.SetHelpFunc(configHelp)
 	RootCmd.AddCommand(configCmd)
 
 }
 
-func runConfig(cmd *cobra.Command, _ []string) error {
+func runConfig(cmd *cobra.Command, args []string) error {
+	sort.Strings(args)
 	// print more help
 	helps, _ := cmd.Flags().GetBool("hh")
-	mics, _ := cmd.Flags().GetBool("mics")
 	if helps == true {
 		HelpMessage()
 		os.Exit(1)
 	}
 	// turn on verbose by default
 	options.Verbose = true
-
 	polling, _ := cmd.Flags().GetBool("poll")
 	// polling all oob
 	if polling == true {
@@ -64,33 +64,53 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	action, _ := cmd.Flags().GetString("action")
+	// backward compatible
+	if action == "" && len(args) > 0 {
+		action = args[0]
+	}
+	getJaelesEnv(&options)
+
 	switch action {
+	case "init":
+		if options.Config.Forced {
+			os.RemoveAll(options.SignFolder)
+			core.UpdatePlugins(options)
+			core.UpdateSignature(options)
+		}
+		reloadSignature(options.SignFolder, options.Config.SkipMics)
+		break
 	case "update":
-		// in case we want to in private repo
-		username, _ := cmd.Flags().GetString("user")
-		password, _ := cmd.Flags().GetString("pass")
-		options.Server.Username = username
-		options.Server.Password = password
+		if options.Config.Forced {
+			os.RemoveAll(options.SignFolder)
+		} else {
+			// only ask if use default Repo
+			if utils.FolderExists(options.SignFolder) && options.Config.Repo == "" {
+				mess := fmt.Sprintf("Looks like you already have signatures in %s\nDo you want to to override it?", options.RootFolder)
+				c := utils.PromptConfirm(mess)
+				if c {
+					utils.InforF("Cleaning root folder")
+					os.RemoveAll(options.SignFolder)
+				}
+			}
+		}
+		database.CleanSigns()
 		core.UpdatePlugins(options)
-		repo, _ := cmd.Flags().GetString("repo")
-		core.UpdateSignature(options, repo)
-		reloadSignature(path.Join(options.RootFolder, "base-signatures"), mics)
+		core.UpdateSignature(options)
+		reloadSignature(path.Join(options.RootFolder, "base-signatures"), options.Config.SkipMics)
 		break
 	case "clear":
+		utils.GoodF("Cleaning your DB")
 		database.CleanScans()
 		database.CleanSigns()
 		database.CleanRecords()
 		break
 	case "clean":
-		os.RemoveAll(path.Join(options.RootFolder, "sqlite.db"))
-		os.RemoveAll(path.Join(options.RootFolder, "config.yaml"))
-		os.RemoveAll(path.Join(options.RootFolder, "burp.json"))
+		utils.InforF("Cleaning root folder: %v", options.RootFolder)
+		os.RemoveAll(options.RootFolder)
 		break
 	case "cred":
-		username, _ := cmd.Flags().GetString("user")
-		password, _ := cmd.Flags().GetString("pass")
-		database.CreateUser(username, password)
-		utils.GoodF("Create new credentials %v:%v \n", username, password)
+		database.CreateUser(options.Config.Username, options.Config.Password)
+		utils.GoodF("Create new credentials %v:%v \n", options.Config.Username, options.Config.Password)
 		break
 	case "oob":
 		secret, _ := cmd.Flags().GetString("secret")
@@ -100,17 +120,44 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 			database.ImportCollab(secret, collab)
 		}
 		break
-
-	case "init":
-		reloadSignature(options.SignFolder, mics)
-		break
 	case "reload":
-		reloadSignature(options.SignFolder, mics)
+		os.RemoveAll(path.Join(options.RootFolder, "base-signatures"))
+		InitDB()
+		reloadSignature(options.SignFolder, options.Config.SkipMics)
+		break
+	case "add":
+		addSignature(options.SignFolder)
+		break
+	case "select":
+		SelectSign()
+		if len(options.SelectedSigns) == 0 {
+			fmt.Fprintf(os.Stderr, "[Error] No signature loaded\n")
+			fmt.Fprintf(os.Stderr, "Use 'jaeles -h' for more information about a command.\n")
+		} else {
+			utils.GoodF("Signatures Loaded: %v", strings.Join(options.SelectedSigns, " "))
+		}
 		break
 	default:
 		HelpMessage()
 	}
+	CleanOutput()
 	return nil
+}
+
+// addSignature add active signatures from a folder
+func addSignature(signFolder string) {
+	signFolder = utils.NormalizePath(signFolder)
+	if !utils.FolderExists(signFolder) {
+		utils.ErrorF("Signature folder not found: %v", signFolder)
+		return
+	}
+	allSigns := utils.GetFileNames(signFolder, ".yaml")
+	if allSigns != nil {
+		utils.InforF("Add Signature from: %v", signFolder)
+		for _, signFile := range allSigns {
+			database.ImportSign(signFile)
+		}
+	}
 }
 
 // reloadSignature signature
@@ -127,7 +174,7 @@ func reloadSignature(signFolder string, skipMics bool) {
 		SignFolder = signFolder
 	}
 	allSigns := utils.GetFileNames(SignFolder, ".yaml")
-	if allSigns != nil {
+	if len(allSigns) > 0 {
 		utils.InforF("Load Signature from: %v", SignFolder)
 		for _, signFile := range allSigns {
 			if skipMics {
@@ -141,13 +188,18 @@ func reloadSignature(signFolder string, skipMics bool) {
 					continue
 				}
 			}
-			database.ImportSign(signFile)
+			utils.DebugF("Importing signature: %v", signFile)
+			err := database.ImportSign(signFile)
+			if err != nil {
+				utils.ErrorF("Error importing signature: %v", signFile)
+			}
 		}
 	}
 
 	signPath := path.Join(options.RootFolder, "base-signatures")
 	passivePath := path.Join(signPath, "passives")
 	resourcesPath := path.Join(signPath, "resources")
+	thirdpartyPath := path.Join(signPath, "thirdparty")
 
 	// copy it to base signature folder
 	if !utils.FolderExists(signPath) {
@@ -161,6 +213,9 @@ func reloadSignature(signFolder string, skipMics bool) {
 	if utils.FolderExists(resourcesPath) {
 		utils.MoveFolder(resourcesPath, options.ResourcesFolder)
 	}
+	if utils.FolderExists(thirdpartyPath) {
+		utils.MoveFolder(thirdpartyPath, options.ThirdPartyFolder)
+	}
 
 }
 
@@ -169,8 +224,13 @@ func configHelp(_ *cobra.Command, _ []string) {
 	HelpMessage()
 }
 
-func rootHelp(_ *cobra.Command, _ []string) {
+func rootHelp(cmd *cobra.Command, _ []string) {
 	fmt.Println(libs.Banner())
+	helps, _ := cmd.Flags().GetBool("hh")
+	if helps {
+		fmt.Println(cmd.UsageString())
+		return
+	}
 	RootMessage()
 }
 
@@ -186,7 +246,7 @@ func RootMessage() {
 	h += `
 Core Flags:
   -c, --concurrency int         Set the concurrency level (default 20)
-  -o, --output string           output folder name (default "out")
+  -o, --output string           Output folder name (default "out")
   -s, --signs strings           Signature selector (Multiple -s flags are accepted)
   -x, --exclude strings         Exclude Signature selector (Multiple -x flags are accepted)
   -L, --level int               Filter signatures by level (default 1)
@@ -199,48 +259,93 @@ Mics Flags:
       --timeout int             HTTP timeout (default 20)
       --debug                   Debug
   -v, --verbose                 Verbose
-  -f, --found string            Run host OS command when vulnerable found
-  -O, --summaryOutput string    Summary output file
-      --passiveOutput string    Passive output folder (default is passive-out)
-      --passiveSummary string   Passive Summary file
+      --no-db                   Disable Database
   -S, --selectorFile string     Signature selector from file
+  -J, --format-input            Enable special input format (default is false)
+  -f, --found string            Run host OS command when vulnerable found
+  -O, --summaryOutput string    Summary output file (default is "jaeles-summary.txt")
+      --passiveOutput string    Passive output folder (default is "passive-out")
+      --passiveSummary string   Passive Summary file
       --sp string               Selector for passive detections (default "*")
       --single string           Forced running in single mode
-  -q, --quite                   Quite Output
-  -Q, --quiteFormat string      Format for quite output (default "{{.VulnURL}}")
-  -R, --report string     		HTML report file name
-      --html string     		Enable generate HTML reports after the scan done 
+      --sverbose bool           Store verbose info in summary file
+  -N  --no-output bool          Disable store output
+      --json bool               Store output as JSON format
+      --chunk bool              Enable chunk running against big input
+  -I, --inline string           Inline Detections
+  -q, --quiet                   Enable Quiet Output
+  -Q, --quietFormat string      Format for quiet output (default "{{.VulnURL}}")
+  -R, --report string           HTML report file name
+      --title string            HTML report title
+      --html string             Enable generate HTML reports after the scan done 
+      --hh string               Full help message
+      --dr                      Shortcut for disable replicate request (avoid sending many timeout requests)
+      --at                      Enable Always True Detection for observe response
+      --lc                      Shortcut for '--proxy http://127.0.0.1:8080'
+      --ba                      Shortcut for take raw input as '{{.BaseURL}}'
 `
 	h += "\n\nExamples Commands:\n"
-	h += "  jaeles scan -s 'jira' -s 'ruby' -u target.com\n"
-	h += "  jaeles scan -c 50 -s 'java' -x 'tomcat' -U list_of_urls.txt\n"
-	h += "  jaeles scan -G -c 50 -s '/tmp/custom-signature/.*' -U list_of_urls.txt\n"
-	h += "  jaeles scan -c 50 -S list_of_selectors.txt -U list_of_urls.txt -H 'Referer: {{.BaseURL}}/x' \n"
+	h += "  jaeles scan -s <signature> -u <url>\n"
+	h += "  jaeles scan -c 50 -s <signature> -U <list_urls> -L <level-of-signatures>\n"
+	h += "  jaeles scan -c 50 -s <signature> -U <list_urls>\n"
+	h += "  jaeles scan -c 50 -s <signature> -U <list_urls> -p 'dest=xxx.burpcollaborator.net'\n"
+	h += "  jaeles scan -c 50 -s <signature> -U <list_urls> -f 'noti_slack \"{{.vulnInfo}}\"'\n"
+	h += "  jaeles scan -v -c 50 -s <signature> -U list_target.txt -o /tmp/output\n"
 	h += "  jaeles scan -s <signature> -s <another-selector> -u http://example.com\n"
-	h += "  cat list_target.txt | jaeles scan -c 50 -s <signature>\n"
+	h += "  echo '{\"BaseURL\":\"https://example.com/sub/\"}' | jaeles scan -s sign.yaml -J \n"
+	h += "  jaeles scan -G -s <signature> -s <another-selector> -x <exclude-selector> -u http://example.com\n"
+	h += "  cat list_target.txt | jaeles scan -c 100 -s <signature>\n"
+
 	h += "\nOthers Commands:\n"
 	h += "  jaeles server -s '/tmp/custom-signature/sensitive/.*' -L 2\n"
-	h += "  jaeles config -a reload --signDir /tmp/signatures-folder/\n"
-	h += "  jaeles config -a update --repo https://github.com/jaeles-project/jaeles-signatures\n"
+	h += "  jaeles server --host 0.0.0.0 --port 5000 -s '/tmp/custom-signature/sensitive/.*' -L 2\n"
+	h += "  jaeles config reload --signDir /tmp/standard-signatures/\n"
+	h += "  jaeles config add -B /tmp/custom-active-signatures/\n"
+	h += "  jaeles config update --repo https://github.com/jaeles-project/jaeles-signatures\n"
 	h += "  jaeles report -o /tmp/scanned/out\n"
+	h += "  jaeles report -o /tmp/scanned/out --title 'Passive Report'\n"
+	h += "  jaeles report -o /tmp/scanned/out --title 'Verbose Report' --sverbose\n"
 	fmt.Println(h)
+	fmt.Printf("Official Documentation can be found here: %s\n", color.GreenString(libs.DOCS))
+
 }
 
 // HelpMessage print help message
 func HelpMessage() {
-	h := "\nConfig Command example:\n\n"
-	h += "  jaeles config -a init\n\n"
-	h += "  jaeles config -a update --repo http://github.com/jaeles-project/another-signatures --user admin --pass admin\n"
-	h += "  jaeles config -a update --repo git@github.com/jaeles-project/another-signatures -K your_private_key\n"
-	h += "  jaeles config -a clean\n\n"
-	h += "  jaeles config -a reload\n\n"
-	h += "  jaeles config -a reload --signDir /tmp/custom-signatures/\n\n"
-	h += "  jaeles config -a cred --user sample --pass not123456\n\n"
+	h := `
+Usage:
+  jaeles config [action]
+
+Config Command examples:
+  # Init default signatures
+  jaeles config init
+
+  # Update latest signatures
+  jaeles config update
+  jaeles config update --repo http://github.com/jaeles-project/another-signatures --user admin --pass admin
+  jaeles config update --repo git@github.com/jaeles-project/another-signatures -K your_private_key
+
+  # Reload signatures from a standard signatures folder (contain passives + resources)
+  jaeles config reload --signDir ~/standard-signatures/
+  
+  # Add custom signatures from folder
+  jaeles config add --signDir ~/custom-signatures/
+
+  # Clean old stuff
+  jaeles config clean
+
+  # More examples
+  jaeles config add --signDir /tmp/standard-signatures/
+  jaeles config cred --user sample --pass not123456
+	`
 	fmt.Println(h)
+	fmt.Printf("Official Documentation can be found here: %s\n", color.GreenString(libs.DOCS))
+
 }
 
-func ScanHelp(_ *cobra.Command, _ []string) {
+func ScanHelp(cmd *cobra.Command, _ []string) {
 	fmt.Println(libs.Banner())
+	fmt.Println(cmd.UsageString())
 	ScanMessage()
 }
 
@@ -254,6 +359,7 @@ func ScanMessage() {
 	h += "  jaeles scan -c 50 -s <signature> -U <list_urls> -f 'noti_slack \"{{.vulnInfo}}\"'\n"
 	h += "  jaeles scan -v -c 50 -s <signature> -U list_target.txt -o /tmp/output\n"
 	h += "  jaeles scan -s <signature> -s <another-selector> -u http://example.com\n"
+	h += "  echo '{\"BaseURL\":\"https://example.com/sub/\"}' | jaeles scan -s sign.yaml -J \n"
 	h += "  jaeles scan -G -s <signature> -s <another-selector> -x <exclude-selector> -u http://example.com\n"
 	h += "  cat list_target.txt | jaeles scan -c 100 -s <signature>\n"
 
@@ -265,24 +371,34 @@ func ScanMessage() {
 	h += "  cat urls.txt | grep 'interesting' | jaeles scan -L 5 -c 50 -s 'fuzz/.*' -U list_of_urls.txt --proxy http://127.0.0.1:8080\n"
 	h += "\n"
 	fmt.Println(h)
+	fmt.Printf("Official Documentation can be found here: %s\n", color.GreenString(libs.DOCS))
+}
+
+// ServerHelp report help message
+func ServerHelp(cmd *cobra.Command, _ []string) {
+	fmt.Println(libs.Banner())
+	fmt.Println(cmd.UsageString())
+	fmt.Printf("Official Documentation can be found here: %s\n", color.GreenString(libs.DOCS))
+
 }
 
 // ReportHelp report help message
-func ReportHelp(_ *cobra.Command, _ []string) {
+func ReportHelp(cmd *cobra.Command, _ []string) {
 	fmt.Println(libs.Banner())
-	ReportMessage()
+	fmt.Println(cmd.UsageString())
+	fmt.Printf("Official Documentation can be found here: %s\n", color.GreenString(libs.DOCS))
 }
 
-// ReportHelp print help message
-func ReportMessage() {
-	h := "\nReport Command example:\n\n"
-	h += `
-  -h, --help              help for report
-      --template string   Report Template File (default "~/.jaeles/plugins/report/index.html")
-	`
-	fmt.Println(h)
+func getJaelesEnv(options *libs.Options) {
+	if utils.GetOSEnv("JAELES_REPO") != "JAELES_REPO" {
+		options.Config.Repo = utils.GetOSEnv("JAELES_REPO")
+	}
+	if utils.GetOSEnv("JAELES_KEY") != "JAELES_KEY" {
+		options.Config.PrivateKey = utils.GetOSEnv("JAELES_KEY")
+	}
 }
 
+// CleanOutput clean the output folder in case nothing found
 func CleanOutput() {
 	// clean output
 	if utils.DirLength(options.Output) == 0 {

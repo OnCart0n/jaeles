@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/jaeles-project/jaeles/utils"
 	"io/ioutil"
+	"os"
 	"regexp"
 	"strings"
 
@@ -24,7 +25,9 @@ func SelectSign(signName string) []string {
 	var signs []models.Signature
 	DB.Find(&signs)
 
-	//if signName == "*" || signName == "" {
+	if signName == "*" || signName == "" {
+		fmt.Fprintf(os.Stderr, "[Warning] You literally just select ALL signatures. I hope you know what are you doing.\n")
+	}
 	//	DB.Find(&signs)
 	//} else {
 	//	DB.Where("sign_id LIKE ? OR name LIKE ?", fmt.Sprintf("%%%v%%", signName), fmt.Sprintf("%%%v%%", signName)).Find(&signs)
@@ -53,10 +56,10 @@ func SelectSign(signName string) []string {
 }
 
 // ImportSign import signature to DB
-func ImportSign(signPath string) {
+func ImportSign(signPath string) error {
 	sign, err := ParseSignature(signPath)
 	if err != nil {
-		return
+		return fmt.Errorf("error parse sign: %v", err)
 	}
 
 	if sign.Info.Category == "" {
@@ -81,6 +84,7 @@ func ImportSign(signPath string) {
 		Type:     sign.Type,
 	}
 	DB.Create(&signObj)
+	return nil
 }
 
 // ParseSign parsing YAML signature file

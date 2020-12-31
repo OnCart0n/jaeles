@@ -17,8 +17,13 @@ type Vulnerability struct {
 	SignPath   string
 	URL        string
 	Risk       string
+	Confidence string
 	ReportPath string
 	ReportFile string
+	Status     string
+	Length     string
+	Words      string
+	Time       string
 }
 
 type ReportData struct {
@@ -27,6 +32,10 @@ type ReportData struct {
 
 // GenActiveReport generate report file
 func GenActiveReport(options libs.Options) error {
+	title := "Jaeles Active Report"
+	if options.Report.Title != "" {
+		title = options.Report.Title
+	}
 	// parse vulns from out/jaeles-summary.txt
 	vulns := ParseVuln(options)
 	if len(vulns) == 0 {
@@ -38,7 +47,7 @@ func GenActiveReport(options libs.Options) error {
 		Version         string
 		Title           string
 	}{
-		Title:           "Jaeles Active Report",
+		Title:           title,
 		Vulnerabilities: vulns,
 		CurrentDay:      utils.GetCurrentDay(),
 		Version:         libs.VERSION,
@@ -93,9 +102,13 @@ func ParseVuln(options libs.Options) []Vulnerability {
 			continue
 		}
 
-		var signID, risk string
-		signID = strings.Split(data[0], "][")[0][1:]
-		risk = strings.Split(data[0], "][")[1][:len(strings.Split(data[0], "][")[1])-1]
+		signID := strings.Split(data[0], "][")[0][1:]
+		info := strings.Split(data[0], "][")[1][:len(strings.Split(data[0], "][")[1])-1]
+		if options.VerboseSummary {
+			info = strings.Split(data[0], "][")[1]
+		}
+		confidence := strings.Split(info, "-")[0]
+		risk := strings.Split(info, "-")[1]
 
 		raw := data[2]
 		// host/sign-hash
@@ -105,9 +118,28 @@ func ParseVuln(options libs.Options) []Vulnerability {
 			SignID:     signID,
 			SignPath:   "SignPath",
 			URL:        data[1],
-			Risk:       strings.ToLower(risk),
+			Risk:       risk,
+			Confidence: confidence,
 			ReportPath: reportPath,
 			ReportFile: filepath.Base(raw),
+		}
+
+		// verbose info
+		if options.VerboseSummary {
+			if len(strings.Split(data[0], "][")) < 3 {
+				utils.ErrorF("Summary doesn't have verbose format")
+				return vulns
+			}
+			// status-length-words-time
+			verbose := strings.Split(strings.Split(data[0], "][")[2], "-")
+			if len(verbose) < 4 {
+				utils.ErrorF("Summary doesn't have verbose format")
+				return vulns
+			}
+			vuln.Status = verbose[0]
+			vuln.Length = verbose[1]
+			vuln.Words = verbose[2]
+			vuln.Time = strings.Trim(verbose[3], "]")
 		}
 		vulns = append(vulns, vuln)
 	}
@@ -120,6 +152,10 @@ func ParseVuln(options libs.Options) []Vulnerability {
 
 // GenPassiveReport generate report file
 func GenPassiveReport(options libs.Options) error {
+	title := "Jaeles Passive Report"
+	if options.Report.Title != "" {
+		title = options.Report.Title
+	}
 	// parse vulns from passive-out/jaeles-passive-summary.txt
 	vulns := ParsePassiveVuln(options)
 	if len(vulns) == 0 {
@@ -131,7 +167,7 @@ func GenPassiveReport(options libs.Options) error {
 		Version         string
 		Title           string
 	}{
-		Title:           "Jaeles Passive Report",
+		Title:           title,
 		Vulnerabilities: vulns,
 		CurrentDay:      utils.GetCurrentDay(),
 		Version:         libs.VERSION,
@@ -186,9 +222,10 @@ func ParsePassiveVuln(options libs.Options) []Vulnerability {
 			continue
 		}
 
-		var signID, risk string
-		signID = strings.Split(data[0], "][")[1]
-		risk = strings.TrimRight(strings.Split(data[0], "][")[2], "]")
+		signID := strings.Split(data[0], "][")[1]
+		info := strings.TrimRight(strings.Split(data[0], "][")[2], "]")
+		confidence := strings.Split(info, "-")[0]
+		risk := strings.Split(info, "-")[1]
 
 		raw := data[2]
 		// host/sign-hash
@@ -198,7 +235,8 @@ func ParsePassiveVuln(options libs.Options) []Vulnerability {
 			SignID:     signID,
 			SignPath:   "SignPath",
 			URL:        data[1],
-			Risk:       strings.ToLower(risk),
+			Risk:       risk,
+			Confidence: confidence,
 			ReportPath: reportPath,
 			ReportFile: filepath.Base(raw),
 		}

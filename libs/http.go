@@ -2,6 +2,7 @@ package libs
 
 // Record all information about request
 type Record struct {
+	Opt           Options
 	DonePassive   bool
 	SelectPassive string
 	OriginReq     Request
@@ -12,8 +13,11 @@ type Record struct {
 	Sign          Signature
 	RawOutput     string
 	ExtraOutput   string
-	DetectString  string
-	ScanID        string
+	// for detection
+	IsVulnerable bool
+	DetectString string
+	DetectResult string
+	ScanID       string
 }
 
 // Origin contain map of origins
@@ -36,6 +40,7 @@ type Request struct {
 	URL               string
 	Proxy             string
 	Method            string
+	Payload           string
 	Redirect          bool
 	UseTemplateHeader bool
 	Headers           []map[string]string
@@ -44,6 +49,7 @@ type Request struct {
 	Beautify          string
 	MiddlewareOutput  string
 	Raw               string
+	Res               string
 	Conditions        []string
 	Middlewares       []string
 	Conclusions       []string

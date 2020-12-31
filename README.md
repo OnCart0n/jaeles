@@ -3,7 +3,7 @@
   <img alt="Jaeles" src="https://github.com/jaeles-project/jaeles-plugins/blob/master/assets/jaeles.png?raw=true" height="140" />
   <p align="center">
     <a href=""><img alt="Software License" src="https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat-square"></a>
-    <a href="https://github.com/jaeles-project/jaeles"><img alt="Release" src="https://img.shields.io/badge/version-beta%20v0.9-blue.svg"></a>
+    <a href="https://github.com/jaeles-project/jaeles"><img alt="Release" src="https://img.shields.io/github/v/release/jaeles-project/jaeles.svg"></a>
     <a href="https://inventory.rawsec.ml/tools.html#Jaeles"><img src="https://inventory.rawsec.ml/img/badges/Rawsec-inventoried-FF5050_flat.svg" alt="Rawsec&#39;s CyberSecurity Inventory"></a>
   </p>
 </p>
@@ -12,7 +12,19 @@
 
 ![Architecture](https://github.com/jaeles-project/jaeles-plugins/blob/master/imgs/jaeles-architecture.png?raw=true)
 
+
+
+## Painless integrate Jaeles into your recon workflow?
+
+<p align="center">
+  <img alt="huntersuite" src="https://user-images.githubusercontent.com/23289085/101143253-35ea6b80-3649-11eb-9130-d1fc306c9a76.png" height="200" />
+  <p align="center">
+Enjoying this tool? Support it's development and take your game to the next level by using <a href="https://huntersuite.io">HunterSuite.io</a>
+  </p>
+</p>
+
 ## Installation
+
 Download [precompiled version here](https://github.com/jaeles-project/jaeles/releases).
 
 If you have a Go environment, make sure you have **Go >= 1.13** with Go Modules enable and run the following command.
@@ -50,6 +62,13 @@ Please visit the [Official Documention](https://jaeles-project.github.io/) for m
 ```
 
 More usage can be found [here](https://jaeles-project.github.io/usage/)
+
+## Run with Docker
+
+```shell
+docker pull j3ssie/jaeles
+docker run j3ssie/jaeles scan -s '<selector>' -u http://example.com
+```
 
 ## Showcases
 
@@ -134,3 +153,7 @@ Support this project with your organization. Your logo will show up here with a 
 ## License
 
 `Jaeles` is made with ♥  by [@j3ssiejjj](https://twitter.com/j3ssiejjj) and it is released under the MIT license.
+
+## Donation
+
+[![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://paypal.me/j3ssiejjj)

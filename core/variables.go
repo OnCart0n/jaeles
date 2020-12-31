@@ -3,12 +3,15 @@ package core
 import (
 	"encoding/base64"
 	"fmt"
+	"github.com/jinzhu/copier"
 	"github.com/thoas/go-funk"
 	"math/rand"
 	"net/url"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jaeles-project/jaeles/libs"
 	"github.com/jaeles-project/jaeles/utils"
@@ -175,6 +178,16 @@ func RunVariables(variableString string) []string {
 		return otto.Value{}
 	})
 
+	vm.Set("Content", func(call otto.FunctionCall) otto.Value {
+		filename := call.Argument(0).String()
+		filename = utils.NormalizePath(filename)
+		data := utils.GetFileContent(filename)
+		if len(data) > 0 {
+			extra = append(extra, data)
+		}
+		return otto.Value{}
+	})
+
 	vm.Set("InputCmd", func(call otto.FunctionCall) otto.Value {
 		cmd := call.Argument(0).String()
 		data := InputCmd(cmd)
@@ -231,6 +244,15 @@ func RunVariables(variableString string) []string {
 		return otto.Value{}
 	})
 
+	vm.Set("Base64Decode", func(call otto.FunctionCall) otto.Value {
+		raw := call.Argument(0).String()
+		data, err := base64.StdEncoding.DecodeString(raw)
+		if err == nil {
+			extra = append(extra, string(data))
+		}
+		return otto.Value{}
+	})
+
 	vm.Set("Base64EncodeByLines", func(call otto.FunctionCall) otto.Value {
 		data := SplitLines(call.Argument(0).String())
 		if len(data) == 0 {
@@ -239,6 +261,11 @@ func RunVariables(variableString string) []string {
 		for _, line := range data {
 			extra = append(extra, Base64Encode(line))
 		}
+		return otto.Value{}
+	})
+
+	vm.Set("Bytes", func(call otto.FunctionCall) otto.Value {
+		extra = append(extra, Bytes()...)
 		return otto.Value{}
 	})
 
@@ -259,27 +286,59 @@ func RunVariables(variableString string) []string {
 		return otto.Value{}
 	})
 
+	vm.Set("OSEnv", func(call otto.FunctionCall) otto.Value {
+		args := call.ArgumentList
+		name := args[0].String()
+		defaultValue := name
+		if len(args) >= 2 {
+			defaultValue = args[1].String()
+		}
+		if name != "" {
+			value := utils.GetOSEnv(name)
+			if value == name {
+				value = defaultValue
+			}
+			extra = append(extra, value)
+		}
+		return otto.Value{}
+	})
+
 	utils.DebugF("variableString: %v", variableString)
 	vm.Run(variableString)
 	return extra
 }
 
+// Bytes return a random string with length
+func Bytes() []string {
+	var bytes []string
+	letter := "0123456789abcdef"
+	for i := range letter {
+		for j := range letter {
+			singByte := fmt.Sprintf("%%%s%s", string(letter[j]), string(letter[i]))
+			bytes = append(bytes, singByte)
+		}
+	}
+	return bytes
+}
+
 // RandomString return a random string with length
 func RandomString(n int) string {
+	var seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	var letter = []rune("abcdefghijklmnopqrstuvwxyz")
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letter[rand.Intn(len(letter))]
+		b[i] = letter[seededRand.Intn(len(letter))]
 	}
 	return string(b)
 }
 
 // RandomNumber return a random number with length
 func RandomNumber(n int) string {
+	var seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	var letter = []rune("0123456789")
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letter[rand.Intn(len(letter))]
+		b[i] = letter[seededRand.Intn(len(letter))]
 	}
 	result := string(b)
 	if !strings.HasPrefix(result, "0") || len(result) == 1 {
@@ -317,4 +376,157 @@ func Base64Encode(raw string) string {
 // URLEncode just URL Encode
 func URLEncode(raw string) string {
 	return url.QueryEscape(raw)
+}
+
+// GenPorts gen list of ports based on input
+func GenPorts(raw string) []string {
+	var ports []string
+	if strings.Contains(raw, ",") {
+		items := strings.Split(raw, ",")
+		for _, item := range items {
+			if strings.Contains(item, "-") {
+				min, err := strconv.Atoi(strings.Split(item, "-")[0])
+				if err != nil {
+					continue
+				}
+				max, err := strconv.Atoi(strings.Split(item, "-")[1])
+				if err != nil {
+					continue
+				}
+				for i := min; i <= max; i++ {
+					ports = append(ports, fmt.Sprintf("%v", i))
+				}
+			} else {
+				ports = append(ports, item)
+			}
+		}
+	} else {
+		if strings.Contains(raw, "-") {
+			min, err := strconv.Atoi(strings.Split(raw, "-")[0])
+			if err != nil {
+				return ports
+			}
+			max, err := strconv.Atoi(strings.Split(raw, "-")[1])
+			if err != nil {
+				return ports
+			}
+			for i := min; i <= max; i++ {
+				ports = append(ports, fmt.Sprintf("%v", i))
+			}
+		} else {
+			ports = append(ports, raw)
+		}
+	}
+
+	return ports
+}
+
+// ReplicationJob replication more jobs based on the signature
+func ReplicationJob(input string, sign libs.Signature) ([]libs.Job, error) {
+	var jobs []libs.Job
+
+	u, err := url.Parse(input)
+	// something wrong so parsing it again
+	if err != nil || u.Scheme == "" || strings.Contains(u.Scheme, ".") {
+		input = fmt.Sprintf("https://%v", input)
+		u, err = url.Parse(input)
+		if err != nil {
+			return jobs, fmt.Errorf("error parsing input: %s", input)
+		}
+	}
+
+	var urls, ports, prefiixes []string
+	if sign.Replicate.Ports != "" {
+		ports = GenPorts(sign.Replicate.Ports)
+	}
+
+	if strings.TrimSpace(sign.Replicate.Prefixes) != "" {
+		value := sign.Replicate.Prefixes
+		// variable as a script
+		if strings.Contains(value, "(") && strings.Contains(value, ")") {
+			if strings.Contains(value, "{{.") && strings.Contains(value, "}}") {
+				value = ResolveVariable(value, sign.Target)
+			}
+			prefiixes = append(prefiixes, RunVariables(value)...)
+		}
+		/*
+			- variable: foo,bar
+		*/
+		// variable as a list
+		if strings.Contains(value, ",") {
+			prefiixes = append(prefiixes, strings.Split(strings.TrimSpace(value), ",")...)
+		}
+		/*
+			- variable: |
+				google.com
+				example.com
+		*/
+		if strings.Contains(value, "\n") {
+			value = strings.Trim(value, "\n\n")
+			prefiixes = append(prefiixes, strings.Split(value, "\n")...)
+
+		}
+	}
+
+	if len(ports) > 0 {
+		for _, port := range ports {
+			cloneURL := url.URL{}
+			err = copier.Copy(&cloneURL, u)
+			if err != nil {
+				continue
+			}
+			oPort := cloneURL.Port()
+			nPort := fmt.Sprintf(":%s", port)
+			if oPort == "" {
+				cloneURL.Host += nPort
+			} else {
+				// avoid duplicate port here
+				if strings.Contains(cloneURL.Host, nPort) {
+					continue
+				}
+				cloneURL.Host = strings.Replace(cloneURL.Host, fmt.Sprintf(":%s", oPort), nPort, -1)
+			}
+
+			urlWithPort := cloneURL.String()
+			urls = append(urls, urlWithPort)
+		}
+	}
+
+	if len(prefiixes) > 0 {
+		if len(urls) == 0 {
+			urls = append(urls, input)
+		}
+
+		for _, urlRaw := range urls {
+			u, err := url.Parse(urlRaw)
+			if err != nil {
+				continue
+			}
+
+			for _, prefix := range prefiixes {
+				prefix = strings.TrimSpace(prefix)
+				cloneURL := url.URL{}
+				err = copier.Copy(&cloneURL, u)
+				if err != nil {
+					continue
+				}
+
+				cloneURL.Path = path.Join(cloneURL.Path, prefix)
+				urlWithPrefix := cloneURL.String()
+				if !sign.BasePath {
+					urlWithPrefix = fmt.Sprintf("%s://%s/%s", cloneURL.Scheme, cloneURL.Host, prefix)
+				}
+				urls = append(urls, urlWithPrefix)
+			}
+		}
+	}
+
+	for _, urlRaw := range urls {
+		job := libs.Job{
+			URL:  urlRaw,
+			Sign: sign,
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
 }

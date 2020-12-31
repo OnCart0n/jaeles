@@ -10,7 +10,7 @@ type Options struct {
 	ScanID           string
 	ConfigFile       string
 	FoundCmd         string
-	QuiteFormat      string
+	QuietFormat      string
 	PassiveOutput    string
 	PassiveSummary   string
 	Output           string
@@ -19,6 +19,7 @@ type Options struct {
 	LogFile          string
 	Proxy            string
 	Selectors        string
+	InlineDetection  string
 	Params           []string
 	Headers          []string
 	Signs            []string
@@ -28,36 +29,70 @@ type Options struct {
 	SelectedPassive  string
 	GlobalVar        map[string]string
 
-	Level           int
-	Concurrency     int
-	Threads         int
-	Delay           int
-	SaveRaw         bool
-	Timeout         int
-	Refresh         int
-	Retry           int
-	Quite           bool
-	Verbose         bool
-	Version         bool
-	Debug           bool
-	NoDB            bool
-	NoBackGround    bool
-	NoOutput        bool
-	EnablePassive   bool
-	DisableParallel bool
-	Server          Server
-	Report          Report
+	Level             int
+	Concurrency       int
+	Threads           int
+	Delay             int
+	Timeout           int
+	Refresh           int
+	Retry             int
+	SaveRaw           bool
+	JsonOutput        bool
+	VerboseSummary    bool
+	Quiet             bool
+	FullHelp          bool
+	Verbose           bool
+	Version           bool
+	Debug             bool
+	NoDB              bool
+	NoBackGround      bool
+	NoOutput          bool
+	EnableFormatInput bool
+	EnablePassive     bool
+	DisableParallel   bool
+
+	// Chunk Options
+	ChunkDir     string
+	ChunkRun     bool
+	ChunkThreads int
+	ChunkSize    int
+	ChunkLimit   int
+
+	Mics   Mics
+	Scan   Scan
+	Server Server
+	Report Report
+	Config Config
+}
+
+// Scan options for api server
+type Scan struct {
+	RawRequest      string
+	EnableGenReport bool
+}
+
+// Mics some shortcut options
+type Mics struct {
+	FullHelp         bool
+	AlwaysTrue       bool
+	BaseRoot         bool
+	BurpProxy        bool
+	DisableReplicate bool
 }
 
 // Report options for api server
 type Report struct {
-	ReportName   string
-	TemplateFile string
-	OutputPath   string
+	VerboseReport bool
+	ReportName    string
+	TemplateFile  string
+	VTemplateFile string
+	OutputPath    string
+	Title         string
 }
 
 // Server options for api server
 type Server struct {
+	NoAuth       bool
 	DBPath       string
 	Bind         string
 	JWTSecret    string
@@ -67,6 +102,16 @@ type Server struct {
 	Username     string
 	Password     string
 	Key          string
+}
+
+// Config options for api server
+type Config struct {
+	Forced     bool
+	SkipMics   bool
+	Username   string
+	Password   string
+	Repo       string
+	PrivateKey string
 }
 
 // Job define job for running routine
@@ -80,4 +125,18 @@ type PJob struct {
 	Req  Request
 	ORec Record
 	Sign Signature
+}
+
+// VulnData vulnerable Data
+type VulnData struct {
+	ScanID          string
+	SignID          string
+	SignName        string
+	URL             string
+	Risk            string
+	DetectionString string
+	DetectResult    string
+	Confidence      string
+	Req             string
+	Res             string
 }

@@ -19,7 +19,6 @@ func Generators(req libs.Request, sign libs.Signature) []libs.Request {
 	var reqs []libs.Request
 	realPayloads := funk.UniqString(ParsePayloads(sign))
 	for _, payload := range realPayloads {
-
 		fuzzReq := req
 		// prepare something so we can access variable in generator string too
 		payload = ResolveVariable(payload, fuzzReq.Target)
@@ -27,6 +26,7 @@ func Generators(req libs.Request, sign libs.Signature) []libs.Request {
 		// set original to blank first
 		fuzzReq.Target["original"] = ""
 		fuzzReq.Detections = ResolveDetection(fuzzReq.Detections, fuzzReq.Target)
+		//fuzzReq.Middlewares = ResolveDetection(fuzzReq.Middlewares, fuzzReq.Target)
 		fuzzReq.Generators = funk.UniqString(ResolveDetection(fuzzReq.Generators, fuzzReq.Target))
 
 		// in case we want to send normal request with no generator
@@ -34,6 +34,7 @@ func Generators(req libs.Request, sign libs.Signature) []libs.Request {
 			reqs = append(reqs, fuzzReq)
 		}
 
+		// really gen requests
 		for _, genString := range fuzzReq.Generators {
 			// just copy exactly request again
 			if genString == "Null()" {
@@ -52,7 +53,11 @@ func Generators(req libs.Request, sign libs.Signature) []libs.Request {
 			}
 
 			for _, injectedReq := range injectedReqs {
+				injectedReq.Target["InjectedURL"] = injectedReq.URL
+				utils.DebugF("Injected URL: %v", injectedReq.URL)
+				injectedReq.Payload = payload
 				// resolve detection this time because we may need parse something in the variable and original
+				injectedReq.Middlewares = AltResolveDetection(fuzzReq.Middlewares, injectedReq.Target)
 				injectedReq.Detections = AltResolveDetection(fuzzReq.Detections, injectedReq.Target)
 				injectedReq.Conclusions = AltResolveDetection(fuzzReq.Conclusions, injectedReq.Target)
 				reqs = append(reqs, injectedReq)
@@ -748,7 +753,9 @@ func ReplaceMe(req libs.Request, arguments []otto.Value) []libs.Request {
 	// replace URL and Body part
 	injectedReq.URL = strings.Replace(req.URL, replaceWord, injectedString, -1)
 	if req.Body != "" {
+		utils.DebugF("Raw body: %v", req.Body)
 		injectedReq.Body = strings.Replace(req.Body, replaceWord, injectedString, -1)
+		utils.DebugF("Injected body: %v", injectedReq.Body)
 	}
 	if len(req.Headers) == 0 {
 		reqs = append(reqs, injectedReq)
